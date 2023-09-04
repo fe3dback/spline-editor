@@ -150,12 +150,14 @@ pub fn draw_ui(mut gz: Gizmos, mouse_plot: Res<MousePlot>, area: Res<Area>) {
 
     // interpolated pos of possible new point
     let new_point_ghost = area.interpolate(mouse_plot.coords.x);
-    draw_box(
-        &mut gz,
-        plot(new_point_ghost) - Vec2::splat(5.0),
-        plot(new_point_ghost) + Vec2::splat(5.0),
-        Color::SEA_GREEN,
-    );
+    if mouse_plot.coords.distance(new_point_ghost) <= (ACTIVE_RADIUS * 1.1) {
+        draw_box(
+            &mut gz,
+            plot(new_point_ghost) - Vec2::splat(5.0),
+            plot(new_point_ghost) + Vec2::splat(5.0),
+            Color::SEA_GREEN,
+        );
+    }
 }
 
 fn draw_box(gz: &mut Gizmos, tl: Vec2, br: Vec2, c: Color) {

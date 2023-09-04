@@ -3,7 +3,7 @@ mod draw;
 mod encoders;
 mod resources;
 
-use std::{fs::File, path::PathBuf};
+use std::path::PathBuf;
 
 use arboard::Clipboard;
 use bevy::{
@@ -14,41 +14,42 @@ use bevy::{
     window::{FileDragAndDrop, PresentMode, Window, WindowMode, WindowPlugin},
     DefaultPlugins,
 };
+use bevy_embedded_assets::EmbeddedAssetPlugin;
 use consts::*;
 use draw::*;
-use encoders::encode;
+use encoders::{decode, encode};
 use resources::*;
 
-// todo list:
-// - clip buffer (ctrl+c / ctrl+v)
-// - attach to file
-// - - ctrl+s - save file
-// - (optionally) ctrl+z/ctrl+shift+z - undo/redo
+// Some fasty-shitty code here, but its works fine..
+// In case of refactoring wish:
+// - remove plotWH and left only windowWH (not need to scale all to *2)
+// - separate modules with events (instead of spaghetti code)
+// - add CQRS (user interactions should push migration actions (with apply/revert code), instead of direct data change)
+// - - add undo/redo
 
 #[derive(Component)]
 pub struct StatusBarTextMarker;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: String::from("Curve editor (ctrl+c/v for copy/paste data)"),
-                resolution: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
-                present_mode: PresentMode::AutoVsync,
-                mode: WindowMode::Windowed,
-                resizable: false,
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: String::from("Curve editor (ctrl+c/v for copy/paste data)"),
+                        resolution: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
+                        present_mode: PresentMode::AutoVsync,
+                        mode: WindowMode::Windowed,
+                        resizable: false,
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .build()
+                .add_before::<bevy::asset::AssetPlugin, _>(EmbeddedAssetPlugin),
+        )
         .insert_resource(Area::new())
-        //.insert_resource(AttachedFile::default()) // todo: defaults
-        .insert_resource(AttachedFile {
-            attached: true,
-            dirty: false,
-            file_path: String::from("/home/neo/code/rs/rs-spline-editor/test.curve"),
-            state: vec![],
-        })
+        .insert_resource(AttachedFile::default())
         .insert_resource(StatusBar::default())
         .insert_resource(MousePlot::default())
         .add_systems(Startup, init)
@@ -105,7 +106,11 @@ fn init(mut cmd: Commands, asset_server: Res<AssetServer>) {
     ));
 }
 
-fn clipboard(keyboard: Res<Input<KeyCode>>, mut status_bar: ResMut<StatusBar>) {
+fn clipboard(
+    mut area: ResMut<Area>,
+    mut status_bar: ResMut<StatusBar>,
+    keyboard: Res<Input<KeyCode>>,
+) {
     if !keyboard.pressed(KeyCode::ControlLeft) {
         return;
     }
@@ -137,11 +142,15 @@ fn clipboard(keyboard: Res<Input<KeyCode>>, mut status_bar: ResMut<StatusBar>) {
         }
     };
 
-    // todo: copy/paste content
-
     match act {
         Action::Copy => {
-            match ctx.set_text("eqweqw") {
+            let mut data: Vec<Vec2> = vec![];
+            for p in area.points.clone() {
+                data.push(p.commited);
+            }
+            let content = encode(data);
+
+            match ctx.set_text(content) {
                 Err(err) => {
                     status_bar.show_error(format!("copy failed: {}", err).as_str());
                 }
@@ -150,7 +159,7 @@ fn clipboard(keyboard: Res<Input<KeyCode>>, mut status_bar: ResMut<StatusBar>) {
         }
         Action::Paste => match ctx.get_text() {
             Ok(content) => {
-                println!("content={}", content);
+                apply_content(&mut area, &mut status_bar, &content);
             }
             Err(err) => {
                 status_bar.show_error(format!("can`t paste content: {}", err).as_str());
@@ -160,15 +169,43 @@ fn clipboard(keyboard: Res<Input<KeyCode>>, mut status_bar: ResMut<StatusBar>) {
     }
 }
 
-fn file_attach(mut events: EventReader<FileDragAndDrop>, mut file: ResMut<AttachedFile>) {
+fn file_attach(
+    mut area: ResMut<Area>,
+    mut events: EventReader<FileDragAndDrop>,
+    mut file: ResMut<AttachedFile>,
+    mut status_bar: ResMut<StatusBar>,
+) {
     for ev in events.iter() {
         match ev {
             FileDragAndDrop::DroppedFile {
                 window: _,
                 path_buf,
             } => {
-                // todo: validate file
-                // todo: read or reject file content
+                let data = match std::fs::read(path_buf) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        status_bar
+                            .show_error(format!("can`t open: {} ({:?})", err, path_buf).as_str());
+                        return;
+                    }
+                };
+
+                let data = match std::str::from_utf8(&data) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        status_bar.show_error(
+                            format!("unexpected content: {} ({:?})", err, path_buf).as_str(),
+                        );
+                        return;
+                    }
+                };
+
+                let changed = apply_content(&mut area, &mut status_bar, data);
+                if !changed {
+                    return;
+                }
+
+                file.state = area.points.clone();
                 file.attached = true;
                 file.dirty = false;
                 file.file_path = path_buf.to_str().unwrap().to_string();
@@ -176,6 +213,24 @@ fn file_attach(mut events: EventReader<FileDragAndDrop>, mut file: ResMut<Attach
             _ => {}
         }
     }
+}
+
+fn apply_content(area: &mut ResMut<Area>, status_bar: &mut ResMut<StatusBar>, data: &str) -> bool {
+    let content = match decode(String::from(data)) {
+        Ok(points) => points,
+        Err(err) => {
+            status_bar.show_error(format!("invalid format: {}", err).as_str());
+            return false;
+        }
+    };
+
+    let mut points: Vec<Point> = vec![];
+    for p in content {
+        points.push(Point::new(p.x, p.y));
+    }
+
+    area.points = points;
+    return true;
 }
 
 fn update_mouse_plot_coords(
@@ -310,7 +365,13 @@ fn create_points(
     let ghost = area.interpolate(mouse_res.coords.x);
     let closest = area.closest(mouse_res.coords);
 
+    // new point very close to exist
     if closest.commited.distance(ghost) < (ACTIVE_RADIUS * 1.1) {
+        return;
+    }
+
+    // mouse far away of new potential point (just click around plot)
+    if mouse_res.coords.distance(ghost) > ACTIVE_RADIUS {
         return;
     }
 
@@ -334,6 +395,11 @@ fn delete_points(
     // find point under cursor
     let closest = area.closest(mouse_res.coords);
     if closest.commited.distance(closest.commited) >= ACTIVE_RADIUS {
+        return;
+    }
+
+    // mouse far away of deleted point (just click around plot)
+    if mouse_res.coords.distance(closest.commited) > ACTIVE_RADIUS {
         return;
     }
 
