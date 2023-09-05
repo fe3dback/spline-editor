@@ -11,6 +11,7 @@ bevy = {version = "0.11.2"} # for release
 rand = "0.8.5"
 arboard = {version = "3.2.1", features = ["wayland-data-control"]}
 bevy_embedded_assets = "0.8.0"
+splines = "4.2.0"
 
 [workspace]
 resolver = "2"

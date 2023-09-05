@@ -1,4 +1,6 @@
 use bevy::{prelude::*, text::Text, time::Time};
+use splines::Key;
+use splines::Spline;
 
 use crate::consts::*;
 use crate::resources::*;
@@ -9,12 +11,14 @@ pub fn draw_plot(mut gz: Gizmos, area: Res<Area>) {
     let point_size = Vec2::splat(5.0);
 
     // draw outline
-    let tl = screen(offset2d);
+    let pxoffset = Vec2::new(0.0, 1.0);
+    let tl = screen(offset2d - pxoffset);
     let br = screen(
         Vec2 {
             x: PLOT_WIDTH,
             y: PLOT_HEIGHT,
-        } - offset2d,
+        } - offset2d
+            + pxoffset,
     );
     draw_box(&mut gz, tl, br, Color::GRAY);
 
@@ -34,14 +38,61 @@ pub fn draw_plot(mut gz: Gizmos, area: Res<Area>) {
         gz.line_2d(top, bottom, color_light(0.03));
     }
 
-    // draw points
-    let mut prev_norm = Vec2::ZERO;
+    // draw linear
     let mut prev = Vec2::ZERO;
-
     let mut points = area.points.clone();
     points.sort_by(|a, b| a.uncommited.x.partial_cmp(&b.uncommited.x).unwrap());
 
     let mut index = -1;
+    for p in points.iter() {
+        let cur = plot(p.uncommited);
+
+        index += 1;
+        if index == 0 {
+            prev = cur;
+            continue;
+        }
+
+        gz.line_2d(prev, cur, color_light(0.35));
+        prev = cur;
+    }
+
+    // draw interpolated result as preview
+    // let start = Key::new(0.0, 0.5, splines::Interpolation::CatmullRom);
+    let spline = Spline::from_vec(
+        area.points
+            .clone()
+            .iter()
+            .map(|p| {
+                Key::new(
+                    p.uncommited.x,
+                    p.uncommited.y,
+                    splines::Interpolation::CatmullRom,
+                )
+            })
+            .collect(),
+    );
+
+    let mut prev_value: Vec2 = Vec2::ZERO;
+    for n in 0..=100 {
+        let x = (n as f32) * 0.01;
+        let value = spline.clamped_sample(x);
+        if value.is_none() {
+            continue;
+        }
+
+        let clamped = value.unwrap().clamp(0.0, 1.0);
+        let value = Vec2::new(x, clamped);
+        gz.line_gradient_2d(
+            plot(prev_value),
+            plot(value),
+            color_axis_x(prev_value.x),
+            color_axis_x(value.x),
+        );
+        prev_value = value;
+    }
+
+    // draw points
     for p in points.iter() {
         let norm = match p.selected {
             false => p.commited,
@@ -56,17 +107,6 @@ pub fn draw_plot(mut gz: Gizmos, area: Res<Area>) {
         }
 
         draw_box(&mut gz, cur - point_size, cur + point_size, color);
-
-        index += 1;
-        if index == 0 {
-            prev_norm = norm;
-            prev = cur;
-            continue;
-        }
-
-        gz.line_gradient_2d(prev, cur, color_axis_x(prev_norm.x), color_axis_x(norm.x));
-        prev = cur;
-        prev_norm = norm;
     }
 }
 
