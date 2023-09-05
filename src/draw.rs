@@ -1,9 +1,8 @@
 use bevy::{prelude::*, text::Text, time::Time};
-use splines::Key;
-use splines::Spline;
 
 use crate::consts::*;
 use crate::resources::*;
+use crate::spline::sample;
 use crate::StatusBarTextMarker;
 
 pub fn draw_plot(mut gz: Gizmos, area: Res<Area>) {
@@ -57,31 +56,15 @@ pub fn draw_plot(mut gz: Gizmos, area: Res<Area>) {
         prev = cur;
     }
 
-    // draw interpolated result as preview
-    // let start = Key::new(0.0, 0.5, splines::Interpolation::CatmullRom);
-    let spline = Spline::from_vec(
-        area.points
-            .clone()
-            .iter()
-            .map(|p| {
-                Key::new(
-                    p.uncommited.x,
-                    p.uncommited.y,
-                    splines::Interpolation::CatmullRom,
-                )
-            })
-            .collect(),
-    );
-
     let mut prev_value: Vec2 = Vec2::ZERO;
+    let spline: Vec<Vec2> = points.clone().iter().map(|p| p.uncommited).collect();
+    let spline: &[Vec2] = &spline;
+
     for n in 0..=100 {
         let x = (n as f32) * 0.01;
-        let value = spline.clamped_sample(x);
-        if value.is_none() {
-            continue;
-        }
+        let value = sample(spline, x);
 
-        let clamped = value.unwrap().clamp(0.0, 1.0);
+        let clamped = value.clamp(0.0, 1.0);
         let value = Vec2::new(x, clamped);
         gz.line_gradient_2d(
             plot(prev_value),

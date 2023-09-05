@@ -1,5 +1,7 @@
 # simple tool for editing splines/curves
 
+![png](./examples/preview.png)
+
 ### install
 
 Only option is build from sources.
@@ -9,6 +11,11 @@ You need rust and cargo.
 cd project
 cargo build --release
 ```
+
+This program output only raw linear points.
+if you want interpolate it, you need to use some interpolation code/library.
+also you can take/rewrite code from `spline.rs`, it contain `catmull-rom` interpolation algorithm 
+used for drawing.
 
 ### Hotkeys
 ```

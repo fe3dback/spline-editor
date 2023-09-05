@@ -2,6 +2,7 @@ mod consts;
 mod draw;
 mod encoders;
 mod resources;
+mod spline;
 
 use std::path::PathBuf;
 
